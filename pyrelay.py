@@ -435,15 +435,17 @@ class RelayConnection():
 
 class Bot():
 	def __init__(self):
-		self.nickname = config.nickname
-		self.username = config.username
-		self.realname = config.realname
-		self.reader   = None
-		self.writer   = None
-		self.last     = time.time()
-		self.slow     = False
-		self.relay    = None
+		self.nickname   = config.nickname
+		self.username   = config.username
+		self.realname   = config.realname
+		self.reader     = None
+		self.writer     = None
+		self.last       = time.time()
+		self.slow       = False
+		self.relay      = None
 		self.relay_task = None
+		self.enabled    = True  # Bot enabled/disabled state
+		self.admin_only = False # Admin-only mode
 
 
 	async def action(self, chan: str, msg: str):
@@ -483,7 +485,7 @@ class Bot():
 					'host'       : config.server,
 					'port'       : config.port,
 					'limit'      : 1024,
-					'ssl'        : ssl_ctx() if config.use_ssl else None,
+					'ssl'        : ssl._create_unverified_context() if config.use_ssl else None,
 					'family'     : 10 if config.use_ipv6 else 2,
 					'local_addr' : config.vhost if config.vhost else None
 				}
@@ -514,23 +516,41 @@ class Bot():
 		target = parts[2]
 		msg    = ' '.join(parts[3:])[1:]
 
+		# Check if user is admin
+		is_admin = (ident == config.admin_ident)
+
 		if target == self.nickname:
-			if ident == config.admin_ident:
+			if is_admin:
 				if msg.startswith('!raw') and len(msg.split()) > 1:
 					option = ' '.join(msg.split()[1:])
 					await self.raw(option)
 			else:
-				await self.sendmsg(nick, 'Do NOT message me!')
+				if self.enabled:
+					await self.sendmsg(nick, 'Do NOT message me!')
 
 		if target.startswith('#'):
 			if msg.startswith('.relay'):
+				# Allow admin to use .relay toggle even when bot is disabled
+				if not self.enabled and not is_admin:
+					return
+				
+				# If bot is disabled, only allow toggle command from admin
+				if not self.enabled and is_admin:
+					if len(msg.split()) >= 2 and msg.split()[1].lower() == 'toggle':
+						await self.handle_relay_command(target, nick, msg, ident)
+					return
+				
+				# Check admin-only mode
+				if self.admin_only and not is_admin:
+					return
+				
 				if time.time() - self.last < config.cmd_flood:
 					if not self.slow:
 						self.slow = True
 						await self.sendmsg(target, color('Slow down!', red))
 				else:
 					self.slow = False
-					await self.handle_relay_command(target, nick, msg)
+					await self.handle_relay_command(target, nick, msg, ident)
 					self.last = time.time()
 
 
@@ -642,20 +662,24 @@ class Bot():
 			logging.error(f'Error displaying GeoIP info: {ex}')
 
 
-	async def handle_relay_command(self, channel: str, nick: str, msg: str):
+	async def handle_relay_command(self, channel: str, nick: str, msg: str, ident: str = None):
 		'''
 		Handle relay commands.
 
 		:param channel: The channel where the command was issued.
 		:param nick: The nickname of the user who issued the command.
 		:param msg: The full message containing the command.
+		:param ident: The full ident of the user (nick!user@host).
 		'''
 		parts = msg.split()
 		if len(parts) < 2:
-			await self.sendmsg(channel, color('Usage: ', cyan) + '.relay ' + color('/help', yellow) + ' | ' + color('/connect', yellow) + ' <server> <port> [ssl] [--proxy] | ' + color('/disconnect', yellow) + ' | ' + color('/info', yellow) + ' | ' + color('<IRC_COMMAND>', yellow))
+			await self.sendmsg(channel, color('Usage: ', cyan) + '.relay ' + color('/help', yellow) + ' | ' + color('/connect', yellow) + ' <server> <port> [ssl] [--proxy] | ' + color('/disconnect', yellow) + ' | ' + color('/info', yellow) + ' | ' + color('toggle', yellow) + ' | ' + color('ignore', yellow) + ' | ' + color('<IRC_COMMAND>', yellow))
 			return
 
 		cmd = parts[1].lower()
+
+		# Check if user is admin
+		is_admin = (ident == config.admin_ident) if ident else False
 
 		if cmd == '/help':
 			# Display help information
@@ -676,6 +700,12 @@ class Bot():
 				color('  /disconnect', yellow),
 				'    ' + color('→', grey) + ' Disconnect from the current relay network',
 				'',
+				color('  toggle', yellow) + ' ' + color('[admin only]', red),
+				'    ' + color('→', grey) + ' Toggle bot on/off (closes all connections when off)',
+				'',
+				color('  ignore', yellow) + ' ' + color('[admin only]', red),
+				'    ' + color('→', grey) + ' Toggle admin-only mode (ignores everyone except admin)',
+				'',
 				color('  <IRC_COMMAND>', yellow),
 				'    ' + color('→', grey) + ' Send raw IRC commands to the relay network',
 				'    ' + color('Examples:', cyan),
@@ -689,6 +719,50 @@ class Bot():
 			
 			for line in help_lines:
 				await self.sendmsg(channel, line)
+		
+		elif cmd == 'toggle':
+			# Toggle bot on/off - admin only
+			if not is_admin:
+				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Error:', red) + ' Admin only command')
+				return
+			
+			self.enabled = not self.enabled
+			
+			if self.enabled:
+				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✓', green) + ' Bot ' + color('enabled', green))
+			else:
+				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✗', red) + ' Bot ' + color('disabled', red) + ' - all connections closing')
+				
+				# Disconnect relay if connected
+				if self.relay and self.relay.connected:
+					try:
+						await self.relay.raw('QUIT :Bot disabled')
+						await asyncio.sleep(0.5)
+					except Exception:
+						pass
+					
+					# Cancel the reader task
+					if self.relay_task and not self.relay_task.done():
+						self.relay_task.cancel()
+						try:
+							await self.relay_task
+						except asyncio.CancelledError:
+							pass
+					
+					self.relay_task = None
+		
+		elif cmd == 'ignore':
+			# Toggle admin-only mode - admin only
+			if not is_admin:
+				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Error:', red) + ' Admin only command')
+				return
+			
+			self.admin_only = not self.admin_only
+			
+			if self.admin_only:
+				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Admin-only mode:', orange) + ' ' + color('enabled', green) + ' (ignoring non-admin users)')
+			else:
+				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Admin-only mode:', orange) + ' ' + color('disabled', red) + ' (accepting all users)')
 		
 		elif cmd == '/connect':
 			if len(parts) < 4:

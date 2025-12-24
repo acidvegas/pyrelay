@@ -24,9 +24,9 @@ use_ipv6 = False
 vhost    = None
 
 # Proxy Configuration (optional - only used when --proxy flag is specified in /connect command)
-proxy      = 'user:pass@host:port' # Example: 'user:pass@127.0.0.1:1080'
+proxy      = None # Example: 'user:pass@127.0.0.1:1080'
 proxy_type = 'socks5'              # Options: 'socks5', 'socks4', 'http'
 
 # Bot Settings
 cmd_flood   = 3
-admin_ident = 'user!ident@host'
+admin_ident = 'nick!user@host'
