@@ -940,129 +940,127 @@ class Bot():
 				if not line:
 					continue
 				
-				parts = line.split()
-				
-				# Detect ERROR messages (server disconnecting us)
-				if line.startswith('ERROR :'):
-					colorized_line = parse_irc_line(line)
-					await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
-					disconnect_reason = 'Server sent ERROR'
-					break
-				
-				# Detect K-Line/G-Line/Z-Line bans
-				elif len(parts) > 1 and parts[1] in ('465', '466', '520', '550'):
-					colorized_line = parse_irc_line(line)
-					await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
-					disconnect_reason = 'Banned from server'
-					break
-				
-				# Detect MODE from self (contains our visible host)
-				elif len(parts) > 1 and parts[1] == 'MODE' and parts[0].startswith(':'):
-					colorized_line = parse_irc_line(line)
-					await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+				try:
+					parts = line.split()
 					
-					# Extract host from :nick!user@host MODE nick :+modes
-					try:
-						prefix = parts[0][1:]  # Remove leading :
-						if '!' in prefix and '@' in prefix:
-							nick = prefix.split('!')[0]
-							host = prefix.split('@')[1]
-							target = parts[2] if len(parts) > 2 else ''
-							
-							# Check if it's a MODE for the nick itself (self-mode)
-							if target == nick and not self.relay.visible_host:
-								self.relay.visible_host = host
-								await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
+					# Detect ERROR messages (server disconnecting us)
+					if line.startswith('ERROR :'):
+						try:
+							colorized_line = parse_irc_line(line)
+						except Exception:
+							colorized_line = line
+						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+						disconnect_reason = 'Server sent ERROR'
+						break
+					
+					# Detect K-Line/G-Line/Z-Line bans
+					elif len(parts) > 1 and parts[1] in ('465', '466', '520', '550'):
+						try:
+							colorized_line = parse_irc_line(line)
+						except Exception:
+							colorized_line = line
+						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+						disconnect_reason = 'Banned from server'
+						break
+					
+					# Detect MODE from self (contains our visible host)
+					elif len(parts) > 1 and parts[1] == 'MODE' and parts[0].startswith(':'):
+						try:
+							colorized_line = parse_irc_line(line)
+						except Exception:
+							colorized_line = line
+						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+						
+						# Extract host from :nick!user@host MODE nick :+modes
+						try:
+							prefix = parts[0][1:]  # Remove leading :
+							if '!' in prefix and '@' in prefix:
+								nick = prefix.split('!')[0]
+								host = prefix.split('@')[1]
+								target = parts[2] if len(parts) > 2 else ''
 								
-								# Lookup GeoIP - extract IP from hostname if needed
-								ip_to_lookup = extract_ip_from_host(host)
-								if ip_to_lookup:
-									geo_info = await get_geoip_info(ip_to_lookup)
-									if geo_info:
-										await self.display_geoip_info(channel, geo_info)
-					except Exception as ex:
-						logging.debug(f'Error parsing MODE for host: {ex}')
-				
-				# Auto-respond to PING
-				elif parts and parts[0] == 'PING':
-					await self.relay.raw('PONG ' + parts[1])
-					colorized_line = parse_irc_line(line)
-					await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
-				
-				# Detect successful registration
-				elif len(parts) > 1 and parts[1] == '001' and not self.relay.registered:
-					self.relay.registered = True
-					colorized_line = parse_irc_line(line)
-					await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+								# Check if it's a MODE for the nick itself (self-mode)
+								if target == nick and not self.relay.visible_host:
+									self.relay.visible_host = host
+									await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
+									
+									# Lookup GeoIP - extract IP from hostname if needed
+									ip_to_lookup = extract_ip_from_host(host)
+									if ip_to_lookup:
+										geo_info = await get_geoip_info(ip_to_lookup)
+										if geo_info:
+											await self.display_geoip_info(channel, geo_info)
+						except Exception as ex:
+							logging.debug(f'Error parsing MODE for host: {ex}')
 					
-					# Try to extract visible host from welcome message
-					# Format: :server 001 nick :Welcome message nick!user@host
-					try:
-						welcome_msg = ' '.join(parts[3:])[1:]
-						if '!' in welcome_msg and '@' in welcome_msg:
-							# Extract the nick!user@host from the message
-							for word in welcome_msg.split():
-								if '!' in word and '@' in word:
-									self.relay.visible_host = word.split('@', 1)[1]
-									break
-					except Exception:
-						pass
+					# Auto-respond to PING
+					elif parts and parts[0] == 'PING':
+						await self.relay.raw('PONG ' + parts[1])
+						try:
+							colorized_line = parse_irc_line(line)
+						except Exception:
+							colorized_line = line
+						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
 					
-					if self.relay.visible_host:
-						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✓', green) + ' ' + color('Registered!', green) + ' Visible host: ' + color(self.relay.visible_host, cyan))
+					# Detect successful registration
+					elif len(parts) > 1 and parts[1] == '001' and not self.relay.registered:
+						self.relay.registered = True
+						try:
+							colorized_line = parse_irc_line(line)
+						except Exception:
+							colorized_line = line
+						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
 						
-						# Lookup GeoIP - extract IP from hostname if needed
-						host_to_lookup = self.relay.visible_host
-						# Strip port if present
-						if ':' in host_to_lookup and not host_to_lookup.count(':') > 1:  # IPv4 with port
-							host_to_lookup = host_to_lookup.split(':')[0]
+						# Try to extract visible host from welcome message
+						# Format: :server 001 nick :Welcome message nick!user@host
+						try:
+							welcome_msg = ' '.join(parts[3:])[1:]
+							if '!' in welcome_msg and '@' in welcome_msg:
+								# Extract the nick!user@host from the message
+								for word in welcome_msg.split():
+									if '!' in word and '@' in word:
+										self.relay.visible_host = word.split('@', 1)[1]
+										break
+						except Exception:
+							pass
 						
-						# Extract IP and lookup
-						ip_to_lookup = extract_ip_from_host(host_to_lookup)
-						if ip_to_lookup:
-							geo_info = await get_geoip_info(ip_to_lookup)
-							if geo_info:
-								await self.display_geoip_info(channel, geo_info)
-					else:
-						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✓', green) + ' ' + color('Registered!', green) + ' You can now send commands')
-				
-				# Detect hostname reveals (numeric 396, 042, 378, etc.)
-				elif len(parts) > 1 and parts[1] in ('396', '042', '378'):
-					colorized_line = parse_irc_line(line)
-					await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
-					
-					# Extract visible host from these numerics
-					# 396: :server 396 nick host :message (IRCd host change notification)
-					# 042: :server 042 nick unique_id :your unique ID
-					# 378: :server 378 nick :is connecting from *@host (some IRCds)
-					try:
-						if parts[1] == '396' and len(parts) >= 4:
-							self.relay.visible_host = parts[3]
-							await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
+						if self.relay.visible_host:
+							await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✓', green) + ' ' + color('Registered!', green) + ' Visible host: ' + color(self.relay.visible_host, cyan))
 							
 							# Lookup GeoIP - extract IP from hostname if needed
 							host_to_lookup = self.relay.visible_host
-							if ':' in host_to_lookup and not host_to_lookup.count(':') > 1:
+							# Strip port if present
+							if ':' in host_to_lookup and not host_to_lookup.count(':') > 1:  # IPv4 with port
 								host_to_lookup = host_to_lookup.split(':')[0]
 							
+							# Extract IP and lookup
 							ip_to_lookup = extract_ip_from_host(host_to_lookup)
 							if ip_to_lookup:
 								geo_info = await get_geoip_info(ip_to_lookup)
 								if geo_info:
 									await self.display_geoip_info(channel, geo_info)
+						else:
+							await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✓', green) + ' ' + color('Registered!', green) + ' You can now send commands')
+					
+					# Detect hostname reveals (numeric 396, 042, 378, etc.)
+					elif len(parts) > 1 and parts[1] in ('396', '042', '378'):
+						try:
+							colorized_line = parse_irc_line(line)
+						except Exception:
+							colorized_line = line
+						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
 						
-						elif parts[1] == '378' and len(parts) >= 4:
-							# Extract from "is connecting from *@host" or similar
-							msg = ' '.join(parts[4:])
-							if '@' in msg:
-								potential_host = msg.split('@')[-1].strip()
-								# Clean up any trailing text
-								potential_host = potential_host.split()[0]
-								self.relay.visible_host = potential_host
+						# Extract visible host from these numerics
+						# 396: :server 396 nick host :message (IRCd host change notification)
+						# 042: :server 042 nick unique_id :your unique ID
+						# 378: :server 378 nick :is connecting from *@host (some IRCds)
+						try:
+							if parts[1] == '396' and len(parts) >= 4:
+								self.relay.visible_host = parts[3]
 								await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
 								
 								# Lookup GeoIP - extract IP from hostname if needed
-								host_to_lookup = potential_host
+								host_to_lookup = self.relay.visible_host
 								if ':' in host_to_lookup and not host_to_lookup.count(':') > 1:
 									host_to_lookup = host_to_lookup.split(':')[0]
 								
@@ -1071,12 +1069,44 @@ class Bot():
 									geo_info = await get_geoip_info(ip_to_lookup)
 									if geo_info:
 										await self.display_geoip_info(channel, geo_info)
-					except Exception:
-						pass
+							
+							elif parts[1] == '378' and len(parts) >= 4:
+								# Extract from "is connecting from *@host" or similar
+								msg = ' '.join(parts[4:])
+								if '@' in msg:
+									potential_host = msg.split('@')[-1].strip()
+									# Clean up any trailing text
+									potential_host = potential_host.split()[0]
+									self.relay.visible_host = potential_host
+									await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
+									
+									# Lookup GeoIP - extract IP from hostname if needed
+									host_to_lookup = potential_host
+									if ':' in host_to_lookup and not host_to_lookup.count(':') > 1:
+										host_to_lookup = host_to_lookup.split(':')[0]
+									
+									ip_to_lookup = extract_ip_from_host(host_to_lookup)
+									if ip_to_lookup:
+										geo_info = await get_geoip_info(ip_to_lookup)
+										if geo_info:
+											await self.display_geoip_info(channel, geo_info)
+						except Exception:
+							pass
+					
+					else:
+						try:
+							colorized_line = parse_irc_line(line)
+						except Exception:
+							colorized_line = line
+						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
 				
-				else:
-					colorized_line = parse_irc_line(line)
-					await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+				except Exception as ex:
+					# If any error occurs while processing this line, still display the raw line
+					logging.error(f'Error processing relay line: {ex}')
+					try:
+						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + line)
+					except Exception:
+						pass  # If we can't even send the raw line, just continue
 
 		except asyncio.CancelledError:
 			disconnect_reason = 'Disconnected by user'
