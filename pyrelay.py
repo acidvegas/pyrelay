@@ -446,6 +446,7 @@ class Bot():
 		self.relay_task = None
 		self.enabled    = True  # Bot enabled/disabled state
 		self.admin_only = False # Admin-only mode
+		self.muted      = False # Mute relay output in main channel (config.channel)
 
 
 	async def action(self, chan: str, msg: str):
@@ -475,6 +476,20 @@ class Bot():
 		:param msg: The message to send to the target.
 		'''
 		await self.raw(f'PRIVMSG {target} :{msg}')
+
+
+	async def relay_sendmsg(self, msg: str):
+		'''
+		Send relay data to #relay (always) and config.channel (unless muted).
+
+		:param msg: The message to send.
+		'''
+		# Always send to #relay
+		await self.sendmsg('#relay', msg)
+		
+		# Also send to main channel unless muted
+		if not self.muted and config.channel.lower() != '#relay':
+			await self.sendmsg(config.channel, msg)
 
 
 	async def connect(self):
@@ -554,11 +569,10 @@ class Bot():
 					self.last = time.time()
 
 
-	async def display_geoip_info(self, channel: str, geo_info: dict):
+	async def relay_display_geoip_info(self, geo_info: dict):
 		'''
-		Display GeoIP information in a colorful format with emojis.
+		Display GeoIP information in relay channels.
 
-		:param channel: The channel to send the info to.
 		:param geo_info: The GeoIP data dictionary.
 		'''
 		try:
@@ -657,7 +671,7 @@ class Bot():
 				# Format with separators
 				formatted_parts = (color(' │ ', grey)).join(parts)
 				msg = color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('🌐 GeoIP:', green) + ' ' + formatted_parts
-				await self.sendmsg(channel, msg)
+				await self.relay_sendmsg(msg)
 		except Exception as ex:
 			logging.error(f'Error displaying GeoIP info: {ex}')
 
@@ -673,7 +687,7 @@ class Bot():
 		'''
 		parts = msg.split()
 		if len(parts) < 2:
-			await self.sendmsg(channel, color('Usage: ', cyan) + '.relay ' + color('/help', yellow) + ' | ' + color('/connect', yellow) + ' <server> <port> [ssl] [--proxy] | ' + color('/disconnect', yellow) + ' | ' + color('/info', yellow) + ' | ' + color('toggle', yellow) + ' | ' + color('ignore', yellow) + ' | ' + color('<IRC_COMMAND>', yellow))
+			await self.sendmsg(channel, color('Usage: ', cyan) + '.relay ' + color('/help', yellow) + ' | ' + color('/connect', yellow) + ' <server> <port> [ssl] [--proxy] | ' + color('/disconnect', yellow) + ' | ' + color('/info', yellow) + ' | ' + color('/mute', yellow) + ' | ' + color('toggle', yellow) + ' | ' + color('ignore', yellow) + ' | ' + color('<IRC_COMMAND>', yellow))
 			return
 
 		cmd = parts[1].lower()
@@ -691,14 +705,17 @@ class Bot():
 				'    ' + color('Flags:', cyan) + ' ' + color('ssl', yellow) + ' = use SSL/TLS, ' + color('--proxy', yellow) + ' = route through proxy',
 				'    ' + color('Examples:', cyan),
 				'      ' + color('.relay /connect irc.example.com 6697 ssl', white),
-				'      ' + color('.relay /connect irc.example.com 6697 ssl --proxy', white),
-				'      ' + color('.relay /connect irc.example.com 6667 MyBot myuser My Bot', white),
+				'      ' + color('.relay /connect irc.example.com 6697 --proxy ssl', white),
+				'      ' + color('.relay /connect irc.example.com 6667 --proxy MyBot myuser My Bot', white),
 				'',
 				color('  /info', yellow),
 				'    ' + color('→', grey) + ' Show current relay connection status and details',
 				'',
 				color('  /disconnect', yellow),
 				'    ' + color('→', grey) + ' Disconnect from the current relay network',
+				'',
+				color('  /mute', yellow),
+				'    ' + color('→', grey) + ' Toggle relay output in main channel (always shown in #relay)',
 				'',
 				color('  toggle', yellow) + ' ' + color('[admin only]', red),
 				'    ' + color('→', grey) + ' Toggle bot on/off (closes all connections when off)',
@@ -714,7 +731,7 @@ class Bot():
 				'      ' + color('.relay NICK newnick', white),
 				'      ' + color('.relay MODE #channel +o user', white),
 				'',
-				color('Note:', light_blue) + ' Protocol data is colorized and IP/location shown automatically!'
+				color('Note:', light_blue) + ' Relay data always goes to #relay, use /mute to hide in main channel!'
 			]
 			
 			for line in help_lines:
@@ -763,6 +780,15 @@ class Bot():
 				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Admin-only mode:', orange) + ' ' + color('enabled', green) + ' (ignoring non-admin users)')
 			else:
 				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Admin-only mode:', orange) + ' ' + color('disabled', red) + ' (accepting all users)')
+		
+		elif cmd == '/mute':
+			# Toggle mute mode - relay output in main channel
+			self.muted = not self.muted
+			
+			if self.muted:
+				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('🔇', white) + ' Relay output ' + color('muted', red) + ' in ' + color(config.channel, cyan) + ' (still visible in ' + color('#relay', cyan) + ')')
+			else:
+				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('🔊', white) + ' Relay output ' + color('unmuted', green) + ' in ' + color(config.channel, cyan))
 		
 		elif cmd == '/connect':
 			if len(parts) < 4:
@@ -850,13 +876,16 @@ class Bot():
 			try:
 				self.relay = RelayConnection(server, port, use_ssl, use_proxy)
 				await self.relay.connect()
-				self.relay_task = asyncio.create_task(self.relay_reader(channel))
+				self.relay_task = asyncio.create_task(self.relay_reader())
 				
 				# Auto-register with provided or default credentials
 				await asyncio.sleep(0.5)
-				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Connected!', green) + ' Registering as ' + color(relay_nick, yellow) + color('!', grey) + color(relay_user, yellow))
-				await self.relay.raw(f'NICK {relay_nick}')
-				await self.relay.raw(f'USER {relay_user} 0 * :{relay_realname}')
+				
+				# Check if relay is still connected (might have been disconnected by relay_reader)
+				if self.relay and self.relay.connected:
+					await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Connected!', green) + ' Registering as ' + color(relay_nick, yellow) + color('!', grey) + color(relay_user, yellow))
+					await self.relay.raw(f'NICK {relay_nick}')
+					await self.relay.raw(f'USER {relay_user} 0 * :{relay_realname}')
 			except Exception as ex:
 				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Connection failed:', red) + f' {ex}')
 				self.relay = None
@@ -924,11 +953,9 @@ class Bot():
 				logging.error(f'Error sending relay command: {ex}')
 
 
-	async def relay_reader(self, channel: str):
+	async def relay_reader(self):
 		'''
-		Read data from the relay connection and display it in the channel.
-
-		:param channel: The channel to send relay data to.
+		Read data from the relay connection and display it in #relay (and main channel unless muted).
 		'''
 		disconnect_reason = None
 		
@@ -949,7 +976,7 @@ class Bot():
 							colorized_line = parse_irc_line(line)
 						except Exception:
 							colorized_line = line
-						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+						await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
 						disconnect_reason = 'Server sent ERROR'
 						break
 					
@@ -959,7 +986,7 @@ class Bot():
 							colorized_line = parse_irc_line(line)
 						except Exception:
 							colorized_line = line
-						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+						await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
 						disconnect_reason = 'Banned from server'
 						break
 					
@@ -969,7 +996,7 @@ class Bot():
 							colorized_line = parse_irc_line(line)
 						except Exception:
 							colorized_line = line
-						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+						await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
 						
 						# Extract host from :nick!user@host MODE nick :+modes
 						try:
@@ -982,14 +1009,14 @@ class Bot():
 								# Check if it's a MODE for the nick itself (self-mode)
 								if target == nick and not self.relay.visible_host:
 									self.relay.visible_host = host
-									await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
+									await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
 									
 									# Lookup GeoIP - extract IP from hostname if needed
 									ip_to_lookup = extract_ip_from_host(host)
 									if ip_to_lookup:
 										geo_info = await get_geoip_info(ip_to_lookup)
 										if geo_info:
-											await self.display_geoip_info(channel, geo_info)
+											await self.relay_display_geoip_info(geo_info)
 						except Exception as ex:
 							logging.debug(f'Error parsing MODE for host: {ex}')
 					
@@ -1000,7 +1027,7 @@ class Bot():
 							colorized_line = parse_irc_line(line)
 						except Exception:
 							colorized_line = line
-						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+						await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
 					
 					# Detect successful registration
 					elif len(parts) > 1 and parts[1] == '001' and not self.relay.registered:
@@ -1009,7 +1036,7 @@ class Bot():
 							colorized_line = parse_irc_line(line)
 						except Exception:
 							colorized_line = line
-						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+						await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
 						
 						# Try to extract visible host from welcome message
 						# Format: :server 001 nick :Welcome message nick!user@host
@@ -1025,7 +1052,7 @@ class Bot():
 							pass
 						
 						if self.relay.visible_host:
-							await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✓', green) + ' ' + color('Registered!', green) + ' Visible host: ' + color(self.relay.visible_host, cyan))
+							await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✓', green) + ' ' + color('Registered!', green) + ' Visible host: ' + color(self.relay.visible_host, cyan))
 							
 							# Lookup GeoIP - extract IP from hostname if needed
 							host_to_lookup = self.relay.visible_host
@@ -1038,9 +1065,9 @@ class Bot():
 							if ip_to_lookup:
 								geo_info = await get_geoip_info(ip_to_lookup)
 								if geo_info:
-									await self.display_geoip_info(channel, geo_info)
+									await self.relay_display_geoip_info(geo_info)
 						else:
-							await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✓', green) + ' ' + color('Registered!', green) + ' You can now send commands')
+							await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✓', green) + ' ' + color('Registered!', green) + ' You can now send commands')
 					
 					# Detect hostname reveals (numeric 396, 042, 378, etc.)
 					elif len(parts) > 1 and parts[1] in ('396', '042', '378'):
@@ -1048,7 +1075,7 @@ class Bot():
 							colorized_line = parse_irc_line(line)
 						except Exception:
 							colorized_line = line
-						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+						await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
 						
 						# Extract visible host from these numerics
 						# 396: :server 396 nick host :message (IRCd host change notification)
@@ -1057,7 +1084,7 @@ class Bot():
 						try:
 							if parts[1] == '396' and len(parts) >= 4:
 								self.relay.visible_host = parts[3]
-								await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
+								await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
 								
 								# Lookup GeoIP - extract IP from hostname if needed
 								host_to_lookup = self.relay.visible_host
@@ -1068,7 +1095,7 @@ class Bot():
 								if ip_to_lookup:
 									geo_info = await get_geoip_info(ip_to_lookup)
 									if geo_info:
-										await self.display_geoip_info(channel, geo_info)
+										await self.relay_display_geoip_info(geo_info)
 							
 							elif parts[1] == '378' and len(parts) >= 4:
 								# Extract from "is connecting from *@host" or similar
@@ -1078,7 +1105,7 @@ class Bot():
 									# Clean up any trailing text
 									potential_host = potential_host.split()[0]
 									self.relay.visible_host = potential_host
-									await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
+									await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
 									
 									# Lookup GeoIP - extract IP from hostname if needed
 									host_to_lookup = potential_host
@@ -1089,7 +1116,7 @@ class Bot():
 									if ip_to_lookup:
 										geo_info = await get_geoip_info(ip_to_lookup)
 										if geo_info:
-											await self.display_geoip_info(channel, geo_info)
+											await self.relay_display_geoip_info(geo_info)
 						except Exception:
 							pass
 					
@@ -1098,13 +1125,13 @@ class Bot():
 							colorized_line = parse_irc_line(line)
 						except Exception:
 							colorized_line = line
-						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+						await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
 				
 				except Exception as ex:
 					# If any error occurs while processing this line, still display the raw line
 					logging.error(f'Error processing relay line: {ex}')
 					try:
-						await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + line)
+						await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + line)
 					except Exception:
 						pass  # If we can't even send the raw line, just continue
 
@@ -1124,9 +1151,9 @@ class Bot():
 				await self.relay.disconnect()
 				self.relay = None
 			
-			# Notify channel of disconnect
+			# Notify channels of disconnect
 			if disconnect_reason:
-				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✗', red) + ' ' + color('Disconnected:', red) + f' {disconnect_reason}')
+				await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✗', red) + ' ' + color('Disconnected:', red) + f' {disconnect_reason}')
 				logging.info(f'Relay disconnected: {disconnect_reason}')
 
 
@@ -1150,6 +1177,8 @@ class Bot():
 					await self.raw(f'JOIN {config.channel} {config.key}')
 				else:
 					await self.raw(f'JOIN {config.channel}')
+				# Always join #relay for relay output
+				await self.raw('JOIN #relay')
 			elif parts[1] == '433': # ERR_NICKNAMEINUSE
 				self.nickname += '_' # If the nickname is already in use, append an underscore to the end of it
 				await self.raw('NICK ' + self.nickname) # Send the new nickname to the server
