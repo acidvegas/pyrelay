@@ -946,7 +946,7 @@ class Bot():
 			try:
 				raw_command = ' '.join(parts[1:])
 				colorized_command = parse_irc_line(raw_command)
-				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('>>>', green) + ' ' + colorized_command)
+				await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('>>>', green) + ' ' + colorized_command)
 				await self.relay.raw(raw_command)
 			except Exception as ex:
 				await self.sendmsg(channel, color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Error sending command:', red) + f' {ex}')
