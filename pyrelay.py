@@ -3,7 +3,6 @@
 
 import asyncio
 import logging
-import logging.handlers
 import ssl
 import time
 
@@ -449,12 +448,10 @@ class Bot():
 		while True:
 			try:
 				options = {
-					'host'       : config.server,
-					'port'       : config.port,
-					'limit'      : 1024,
-					'ssl'        : ssl._create_unverified_context() if config.use_ssl else None,
-					'family'     : 10 if config.use_ipv6 else 2,
-					'local_addr' : config.vhost if config.vhost else None
+					'host'  : config.server,
+					'port'  : config.port,
+					'limit' : 1024,
+					'ssl'   : ssl._create_unverified_context() if config.use_ssl else None
 				}
 				self.reader, self.writer = await asyncio.wait_for(asyncio.open_connection(**options), 15)
 				
@@ -929,6 +926,9 @@ class Bot():
 						except Exception:
 							colorized_line = line
 						await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color('] ', grey) + color('<<<', cyan) + ' ' + colorized_line)
+
+				except UnicodeDecodeError:
+					continue
 				
 				except Exception as ex:
 					# If any error occurs while processing this line, still display the raw line
