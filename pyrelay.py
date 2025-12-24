@@ -8,9 +8,9 @@ import ssl
 import time
 
 try:
-	import aiohttp
+	import apv
 except ImportError:
-	raise ImportError('missing \'aiohttp\' library (pip install aiohttp)')
+	raise ImportError('missing \'apv\' library (pip install apv)')
 
 try:
 	from python_socks.async_.asyncio import Proxy
@@ -295,54 +295,6 @@ def parse_proxy(proxy_string: str) -> dict:
 	}
 
 
-def extract_ip_from_host(host: str) -> str:
-	'''
-	Extract IP address from hostname (handles dash-separated IPs in hostnames).
-
-	:param host: The hostname to extract IP from.
-	'''
-	# Check if it's already an IP
-	if is_ip_address(host):
-		return host
-	
-	# Check for dash-separated IP in hostname (e.g., 45-239-214-241.example.com)
-	parts = host.split('.')
-	if parts and '-' in parts[0]:
-		potential_ip = parts[0].replace('-', '.')
-		if is_ip_address(potential_ip):
-			return potential_ip
-	
-	return None
-
-
-def is_ip_address(host: str) -> bool:
-	'''
-	Check if a string looks like an IP address.
-
-	:param host: The hostname to check.
-	'''
-	# Remove common separators and check if only hex/digits remain
-	cleaned = host.replace('.', '').replace(':', '').replace('[', '').replace(']', '')
-	return cleaned and all(c in '0123456789abcdefABCDEF' for c in cleaned)
-
-
-async def get_geoip_info(ip: str) -> dict:
-	'''
-	Get GeoIP information from maxmind.supernets.org.
-
-	:param ip: The IP address to lookup.
-	'''
-	try:
-		async with aiohttp.ClientSession() as session:
-			async with session.get(f'http://maxmind.supernets.org/{ip}', timeout=aiohttp.ClientTimeout(total=10)) as response:
-				if response.status == 200:
-					data = await response.json()
-					return data
-	except Exception as ex:
-		logging.error(f'GeoIP lookup failed: {ex}')
-	return None
-
-
 class RelayConnection():
 	def __init__(self, server: str, port: int, use_ssl: bool, use_proxy: bool = False):
 		self.server    = server
@@ -567,113 +519,6 @@ class Bot():
 					self.slow = False
 					await self.handle_relay_command(target, nick, msg, ident)
 					self.last = time.time()
-
-
-	async def relay_display_geoip_info(self, geo_info: dict):
-		'''
-		Display GeoIP information in relay channels.
-
-		:param geo_info: The GeoIP data dictionary.
-		'''
-		try:
-			# Country code to flag emoji mapping
-			def get_flag_emoji(iso_code: str) -> str:
-				'''Convert ISO country code to flag emoji.'''
-				if not iso_code or len(iso_code) != 2:
-					return '🌍'
-				# Convert ISO code to regional indicator symbols
-				return ''.join(chr(127397 + ord(c)) for c in iso_code.upper())
-			
-			# Build the info message with colors
-			parts = []
-			
-			# Country with flag emoji
-			country_name = None
-			country_iso = None
-			if geo_info.get('country'):
-				country_data = geo_info['country']
-				if isinstance(country_data, dict):
-					country_name = country_data.get('name')
-					country_iso = country_data.get('iso_code')
-				else:
-					country_name = str(country_data)
-			
-			if country_name:
-				flag = get_flag_emoji(country_iso) if country_iso else '🌍'
-				parts.append(flag + ' ' + color(country_name, white))
-			
-			# Region/State
-			if geo_info.get('region'):
-				region_data = geo_info['region']
-				region_name = region_data.get('name') if isinstance(region_data, dict) else str(region_data)
-				parts.append(color('Region:', light_blue) + ' ' + color(region_name, white))
-			
-			# City
-			if geo_info.get('city'):
-				city_data = geo_info['city']
-				city_name = city_data.get('name') if isinstance(city_data, dict) else str(city_data)
-				parts.append(color('🏙️', white) + ' ' + color(city_name, white))
-			
-			# Coordinates
-			location = geo_info.get('location', {})
-			if isinstance(location, dict):
-				lat = location.get('latitude')
-				lon = location.get('longitude')
-				if lat and lon:
-					parts.append(color('📍', white) + ' ' + color(f'{lat}, {lon}', light_grey))
-			
-			# ASN - handle various formats
-			asn_displayed = False
-			if geo_info.get('asn'):
-				asn_data = geo_info['asn']
-				if isinstance(asn_data, dict):
-					asn_num = asn_data.get('asn') or asn_data.get('number') or asn_data.get('autonomous_system_number')
-					asn_org = asn_data.get('org') or asn_data.get('organization') or asn_data.get('autonomous_system_organization')
-					if asn_num and asn_org:
-						parts.append(color('ASN:', light_blue) + ' ' + color(str(asn_num), yellow) + ' ' + color('🏢', white) + ' ' + color(asn_org, cyan))
-						asn_displayed = True
-					elif asn_num:
-						parts.append(color('ASN:', light_blue) + ' ' + color(str(asn_num), yellow))
-					elif asn_org:
-						parts.append(color('🏢', white) + ' ' + color(asn_org, cyan))
-						asn_displayed = True
-				else:
-					parts.append(color('ASN:', light_blue) + ' ' + color(str(asn_data), yellow))
-			
-			# Check for autonomous_system_number and autonomous_system_organization at top level
-			if not asn_displayed:
-				asn_num = geo_info.get('autonomous_system_number')
-				asn_org = geo_info.get('autonomous_system_organization')
-				if asn_num and asn_org:
-					parts.append(color('ASN:', light_blue) + ' ' + color(f'AS{asn_num}', yellow) + ' ' + color('🏢', white) + ' ' + color(asn_org, cyan))
-					asn_displayed = True
-				elif asn_num:
-					parts.append(color('ASN:', light_blue) + ' ' + color(f'AS{asn_num}', yellow))
-				elif asn_org and not asn_displayed:
-					parts.append(color('🏢', white) + ' ' + color(asn_org, cyan))
-					asn_displayed = True
-			
-			# ISP/Organization (if not already shown from ASN)
-			if not asn_displayed and geo_info.get('org'):
-				org = geo_info['org']
-				parts.append(color('🏢', white) + ' ' + color(org, cyan))
-			elif not asn_displayed and geo_info.get('isp'):
-				isp = geo_info['isp']
-				parts.append(color('🏢', white) + ' ' + color(isp, cyan))
-			
-			# Timezone
-			if geo_info.get('timezone'):
-				tz_data = geo_info['timezone']
-				tz_name = tz_data.get('name') if isinstance(tz_data, dict) else str(tz_data)
-				parts.append(color('🕐', white) + ' ' + color(tz_name, light_grey))
-			
-			if parts:
-				# Format with separators
-				formatted_parts = (color(' │ ', grey)).join(parts)
-				msg = color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('🌐 GeoIP:', green) + ' ' + formatted_parts
-				await self.relay_sendmsg(msg)
-		except Exception as ex:
-			logging.error(f'Error displaying GeoIP info: {ex}')
 
 
 	async def handle_relay_command(self, channel: str, nick: str, msg: str, ident: str = None):
@@ -1010,13 +855,6 @@ class Bot():
 								if target == nick and not self.relay.visible_host:
 									self.relay.visible_host = host
 									await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
-									
-									# Lookup GeoIP - extract IP from hostname if needed
-									ip_to_lookup = extract_ip_from_host(host)
-									if ip_to_lookup:
-										geo_info = await get_geoip_info(ip_to_lookup)
-										if geo_info:
-											await self.relay_display_geoip_info(geo_info)
 						except Exception as ex:
 							logging.debug(f'Error parsing MODE for host: {ex}')
 					
@@ -1053,19 +891,6 @@ class Bot():
 						
 						if self.relay.visible_host:
 							await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✓', green) + ' ' + color('Registered!', green) + ' Visible host: ' + color(self.relay.visible_host, cyan))
-							
-							# Lookup GeoIP - extract IP from hostname if needed
-							host_to_lookup = self.relay.visible_host
-							# Strip port if present
-							if ':' in host_to_lookup and not host_to_lookup.count(':') > 1:  # IPv4 with port
-								host_to_lookup = host_to_lookup.split(':')[0]
-							
-							# Extract IP and lookup
-							ip_to_lookup = extract_ip_from_host(host_to_lookup)
-							if ip_to_lookup:
-								geo_info = await get_geoip_info(ip_to_lookup)
-								if geo_info:
-									await self.relay_display_geoip_info(geo_info)
 						else:
 							await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('✓', green) + ' ' + color('Registered!', green) + ' You can now send commands')
 					
@@ -1085,17 +910,6 @@ class Bot():
 							if parts[1] == '396' and len(parts) >= 4:
 								self.relay.visible_host = parts[3]
 								await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
-								
-								# Lookup GeoIP - extract IP from hostname if needed
-								host_to_lookup = self.relay.visible_host
-								if ':' in host_to_lookup and not host_to_lookup.count(':') > 1:
-									host_to_lookup = host_to_lookup.split(':')[0]
-								
-								ip_to_lookup = extract_ip_from_host(host_to_lookup)
-								if ip_to_lookup:
-									geo_info = await get_geoip_info(ip_to_lookup)
-									if geo_info:
-										await self.relay_display_geoip_info(geo_info)
 							
 							elif parts[1] == '378' and len(parts) >= 4:
 								# Extract from "is connecting from *@host" or similar
@@ -1106,17 +920,6 @@ class Bot():
 									potential_host = potential_host.split()[0]
 									self.relay.visible_host = potential_host
 									await self.relay_sendmsg(color('[', grey) + color('RELAY', pink) + color(']', grey) + ' ' + color('Host:', light_blue) + ' ' + color(self.relay.visible_host, cyan))
-									
-									# Lookup GeoIP - extract IP from hostname if needed
-									host_to_lookup = potential_host
-									if ':' in host_to_lookup and not host_to_lookup.count(':') > 1:
-										host_to_lookup = host_to_lookup.split(':')[0]
-									
-									ip_to_lookup = extract_ip_from_host(host_to_lookup)
-									if ip_to_lookup:
-										geo_info = await get_geoip_info(ip_to_lookup)
-										if geo_info:
-											await self.relay_display_geoip_info(geo_info)
 						except Exception:
 							pass
 					
@@ -1201,28 +1004,11 @@ class Bot():
 			logging.exception(f'Unknown error has occured! ({ex})')
 
 
-def setup_logger(log_filename: str, to_file: bool = False):
-	'''
-	Set up logging to console & optionally to file.
-
-	:param log_filename: The filename of the log file
-	:param to_file: Whether or not to log to a file
-	'''
-	sh = logging.StreamHandler()
-	sh.setFormatter(logging.Formatter('%(asctime)s | %(levelname)9s | %(message)s', '%I:%M %p'))
-	if to_file:
-		fh = logging.handlers.RotatingFileHandler(log_filename+'.log', maxBytes=250000, backupCount=3, encoding='utf-8') # Max size of 250KB, 3 backups
-		fh.setFormatter(logging.Formatter('%(asctime)s | %(levelname)9s | %(filename)s.%(funcName)s.%(lineno)d | %(message)s', '%Y-%m-%d %I:%M %p')) # We can be more verbose in the log file
-		logging.basicConfig(level=logging.NOTSET, handlers=(sh,fh))
-	else:
-		logging.basicConfig(level=logging.NOTSET, handlers=(sh,))
-
-
 
 if __name__ == '__main__':
 	print(f'Connecting to {config.server}:{config.port} (SSL: {config.use_ssl}) and joining {config.channel}')
 
-	setup_logger('pyrelay', to_file=True)
+	apv.setup_logging(level='INFO', show_details=True)
 
 	bot = Bot()
 
